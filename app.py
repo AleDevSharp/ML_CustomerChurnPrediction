@@ -119,6 +119,7 @@ df['Predicted_Churn'] = model.predict(X_scaled)
 # 15. Top 10 customers most at risk of churn
 # TODO: add top 10 customers most at risk of churn
 
+
 print("\n[FINISH] Process completed successfully.")
 
 if __name__ == '__main__':
