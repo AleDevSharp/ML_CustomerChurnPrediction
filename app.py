@@ -23,18 +23,29 @@ from sklearn.metrics import classification_report, confusion_matrix, roc_auc_sco
 
 # 1. Load dataset
 print("\n[1] Loading dataset...")
-df = pd.read_csv("datasets/WA_Fn-UseC_-Telco-Customer-Churn.csv")
+df_original = pd.read_csv("datasets/WA_Fn-UseC_-Telco-Customer-Churn.csv")
+
+# Create a working copy of the dataframe
+df = df_original.copy()
+
+# Store customer IDs before any processing that might drop them
+customer_ids_all = df['customerID']  # Store all customer IDs initially
 
 # 2. Data preprocessing
 print("\n[2] Preprocessing data...")
 df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
 df.dropna(inplace=True)
 
-# 3. Drop irrelevant columns
+# Keep track of which customerIDs are retained after dropna
+# This is crucial because dropna changes the index and removes rows
+customer_ids_after_dropna = df['customerID']
+
+# 3. Drop irrelevant columns (excluding customerID for now)
 print("\n[3] Dropping irrelevant columns...")
-irrelevant_cols = ['CustomerID', 'Count', 'Country', 'State', 'City', 'Zip Code',
+# customerID is now handled separately to be kept for final output
+irrelevant_cols = ['Count', 'Country', 'State', 'City', 'Zip Code',
                    'Lat Long', 'Latitude', 'Longitude', 'Churn Label', 'Churn Score', 'CLTV', 'Churn Reason']
-df.drop(columns=irrelevant_cols, inplace=True, errors='ignore')
+df.drop(columns=irrelevant_cols, inplace=True, errors='ignore')  # Still drop other irrelevant ones
 
 # 4. Use the target variable 'Churn Value' directly
 print("\n[4] Using target variable 'Churn Value'...")
@@ -47,12 +58,20 @@ print(df['Churn'].value_counts(normalize=True))
 # 5. Encode categorical features using one-hot encoding
 print("\n[5] Encoding categorical features...")
 categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+# Ensure 'customerID' is not treated as a categorical feature for one-hot encoding
+if 'customerID' in categorical_cols:
+    categorical_cols.remove('customerID')
 df = pd.get_dummies(df, columns=categorical_cols, drop_first=True)
 
 # 6. Split features and target
 print("\n[6] Splitting features and target...")
-X = df.drop(['Churn', 'Churn Value'], axis=1, errors='ignore')
+# Separate customerID from features before scaling/training
+X = df.drop(['Churn', 'Churn Value', 'customerID'], axis=1, errors='ignore')
 y = df['Churn']
+
+# Align customer_ids with the rows in X (after dropna and any other row removals if applicable)
+# The index of X should match the index of the relevant customer IDs
+customer_ids_aligned_with_X = df['customerID']
 
 # 7. Scale features
 print("\n[7] Scaling features...")
@@ -111,14 +130,23 @@ plt.grid()
 plt.show()
 
 print("\n[13] Generating churn probabilities for all customers...")
-df['Churn_Probability'] = model.predict_proba(X_scaled)[:, 1]
 
-# 14. Add predictioned
-df['Predicted_Churn'] = model.predict(X_scaled)
+# Generate probabilities for the entire dataset (X_scaled)
+df_results = pd.DataFrame({
+    'customerID': customer_ids_aligned_with_X,
+    'Churn_Probability': model.predict_proba(X_scaled)[:, 1],
+    'Predicted_Churn': model.predict(X_scaled)
+})
 
-# 15. Top 10 customers most at risk of churn
-# TODO: add top 10 customers most at risk of churn
+# 15. Top N customers most at risk of churn
+print("\n[15] Identifying top N customers most at risk of churn...")
+n_top_customers = 15
 
+# Sort by Churn_Probability in descending order
+top_n_at_risk = df_results.sort_values(by='Churn_Probability', ascending=False).head(n_top_customers)
+
+print(f"\nTop {n_top_customers} Customers Most At Risk of Churn:")
+print(top_n_at_risk)
 
 print("\n[FINISH] Process completed successfully.")
 
