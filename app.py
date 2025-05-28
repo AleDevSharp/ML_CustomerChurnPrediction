@@ -115,6 +115,7 @@ if len(np.unique(y_test)) == 2:
 else:
     print("\n[WARNING] ROC AUC score and curve skipped: only one class present in y_test.")
 
+
 # 12. Plot top 10 feature importances
 print("\n[12] Plotting top 10 feature importances...")
 importances = model.feature_importances_
