@@ -1,8 +1,8 @@
 """
 ------------------------------------------------------------------------
 File : app.py
-Description: Main project
-Date creation: 21-05-2025
+Description: Main project for Telco Customer Churn Prediction using Random Forest
+Date creation: 21-05-2025 (Updated: 29-05-2025)
 Project : soup-server
 Author: Alessio Giacché, Matteo Brachetta, Lorenzo
 Copyright: Copyright (c) 2024 Alessio Giacché <ale.giacc.dev@gmail.com>
@@ -10,177 +10,264 @@ License : MIT
 ------------------------------------------------------------------------
 """
 
-# Import
+# Core Imports
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 
-# ML Import
+# Scikit-learn Imports
 from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, roc_curve, make_scorer, \
-    recall_score, precision_score, f1_score
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, roc_curve
+from sklearn.pipeline import Pipeline
 
-# Per bilanciare il dataset con SMOTE (opzionale, ma consigliato per futuri miglioramenti)
-# from imblearn.over_sampling import SMOTE
-# from imbleblearn.pipeline import Pipeline as ImbPipeline # Usare Pipeline di imblearn con SMOTE
+# Suppress warnings for cleaner output
+import warnings
+warnings.filterwarnings('ignore')
 
-# 1. Load dataset
-print("\n[1] Loading dataset...")
-df_original = pd.read_csv("datasets/WA_Fn-UseC_-Telco-Customer-Churn.csv")
+def run_random_forest_churn_prediction(filepath="datasets/WA_Fn-UseC_-Telco-Customer-Churn.csv"):
+    """
+    Esegue l'intera pipeline di classificazione Random Forest per la previsione del churn dei clienti,
+    inclusi caricamento dati, pre-elaborazione, addestramento del modello, valutazione e visualizzazione.
 
-# Create a working copy of the dataframe
-df = df_original.copy()
+    Args:
+        filepath (str): Percorso del file CSV del dataset "WA_Fn-UseC_-Telco-Customer-Churn.csv".
+    """
 
-# 2. Data preprocessing
-print("\n[2] Preprocessing data...")
-df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
-df.dropna(inplace=True)
+    print("\n--- Avvio della Previsione Churn con Random Forest ---")
 
-# Keep track of which customerIDs are retained after dropna for final output
-customer_ids_aligned_with_X = df['customerID']  # This will be used at the end
+    # 1. Caricamento del Dataset
+    print("\n[1] Caricamento del dataset...")
+    try:
+        df_original = pd.read_csv(filepath)
+        print(f"Dataset caricato con successo: {df_original.shape[0]} righe e {df_original.shape[1]} colonne.")
+    except FileNotFoundError:
+        print(f"Errore: Dataset non trovato al percorso '{filepath}'. Controlla il path.")
+        return
+    except Exception as e:
+        print(f"Si è verificato un errore durante il caricamento del dataset: {e}")
+        return
 
-# 3. Drop irrelevant columns (excluding customerID for now)
-print("\n[3] Dropping irrelevant columns...")
-irrelevant_cols = ['Count', 'Country', 'State', 'City', 'Zip Code',
-                   'Lat Long', 'Latitude', 'Longitude', 'Churn Label', 'Churn Score', 'CLTV', 'Churn Reason']
-df.drop(columns=irrelevant_cols, inplace=True, errors='ignore')
+    # Crea una copia per le operazioni di pre-elaborazione
+    df_processed = df_original.copy()
 
-# 4. Use the target variable 'Churn Value' directly
-print("\n[4] Using target variable 'Churn Value'...")
-df['Churn'] = df['Churn'].map({'No': 0, 'Yes': 1})
+    # Define columns to drop that are not typical for retail activities
+    # These are telco-specific services or contract details.
+    columns_to_drop_retail = [
+        'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity',
+        'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV',
+        'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod'
+    ]
 
-# Check class distribution
-print("\nChurn class distribution:")
-print(df['Churn'].value_counts(normalize=True))
+    # Drop the specified columns if they exist in the DataFrame
+    existing_columns_to_drop = [col for col in columns_to_drop_retail if col in df_processed.columns]
+    if existing_columns_to_drop:
+        df_processed.drop(columns=existing_columns_to_drop, inplace=True)
+        print(f"Rimosse le colonne non pertinenti al retail: {', '.join(existing_columns_to_drop)}.")
+    else:
+        print("Nessuna colonna specifica del servizio Telco trovata da rimuovere.")
 
-# 5. Encode categorical features using one-hot encoding
-print("\n[5] Encoding categorical features...")
-categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
-# Ensure 'customerID' is not treated as a categorical feature for one-hot encoding
-if 'customerID' in categorical_cols:
-    categorical_cols.remove('customerID')
-df = pd.get_dummies(df, columns=categorical_cols, drop_first=True)
+    # 2. Pulizia e Preparazione Iniziale dei Dati
+    print("\n[2] Pulizia e preparazione iniziale dei dati...")
+    df_processed['TotalCharges'] = pd.to_numeric(df_processed['TotalCharges'], errors='coerce')
+    df_processed.dropna(inplace=True)
+    print(f"Righe dopo la gestione dei valori mancanti: {df_processed.shape[0]}.")
 
-# 6. Split features and target
-print("\n[6] Splitting features and target...")
-# Separate customerID from features before scaling/training
-X = df.drop(['Churn', 'Churn Value', 'customerID'], axis=1, errors='ignore')
-y = df['Churn']
+    if df_processed['SeniorCitizen'].dtype == 'object':
+        df_processed['SeniorCitizen'] = df_processed['SeniorCitizen'].map({'No': 0, 'Yes': 1})
 
-# 7. Scale features
-print("\n[7] Scaling features...")
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+    df_processed.drop(columns=['customerID'], inplace=True)
+    print("Colonna 'customerID' temporaneamente rimossa per il training.")
 
-# 8. Train/test split
-print("\n[8] Splitting into training and test sets...")
-X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42, stratify=y)
+    # 3. Preparazione della Variabile Target
+    if 'Churn' in df_processed.columns:
+        df_processed['Churn'] = df_processed['Churn'].map({'No': 0, 'Yes': 1})
+        print("Variabile target 'Churn' mappata a 0 (No) e 1 (Sì).")
+    else:
+        print("Errore: Colonna 'Churn' non trovata. Impossibile procedere senza una variabile target.")
+        return
 
-# 9. Train Random Forest with hyperparameter tuning using GridSearchCV
-print("\n[9] Training Random Forest model with GridSearchCV for hyperparameter tuning...")
+    print("\nDistribuzione delle classi 'Churn':")
+    print(df_processed['Churn'].value_counts(normalize=True))
+    if df_processed['Churn'].nunique() < 2:
+        print("[AVVISO] È presente una sola classe nella variabile target. Impossibile addestrare un classificatore.")
+        return
 
-# Definisci il range di iperparametri da testare
-param_grid = {
-    'n_estimators': [100, 200, 300],  # Numero di alberi nella foresta. Aumentare può migliorare ma rallentare.
-    'max_features': ['sqrt', 'log2'],  # Numero di feature da considerare per il miglior split.
-    'max_depth': [10, 20, 30, None],
-    # Profondità massima dell'albero. None significa nodi espansi fino a quando non sono puri.
-    'min_samples_split': [2, 5, 10],  # Numero minimo di campioni richiesti per dividere un nodo interno.
-    'min_samples_leaf': [1, 2, 4]  # Numero minimo di campioni richiesti per essere a un nodo foglia.
-}
+    # 4. Feature Engineering ed Encoding
+    print("\n[4] Codifica delle feature categoriche con One-Hot Encoding...")
+    categorical_cols = df_processed.select_dtypes(include=['object']).columns.tolist()
 
-# Inizializza il modello Random Forest con class_weight='balanced'
-rf = RandomForestClassifier(random_state=42, class_weight='balanced')
+    if categorical_cols:
+        df_processed = pd.get_dummies(df_processed, columns=categorical_cols, drop_first=True)
+        print(f"Codificate {len(categorical_cols)} feature categoriche.")
+    else:
+        print("Nessuna feature categorica trovata per la codifica.")
 
-# Utilizza StratifiedKFold per garantire che la proporzione delle classi sia mantenuta in ogni fold
-# Questo è importante per i dataset sbilanciati
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    # 5. Suddivisione di Feature e Target
+    print("\n[5] Suddivisione delle feature (X) e del target (y)...")
+    X = df_processed.drop('Churn', axis=1)
+    y = df_processed['Churn']
 
-# Crea un scorer personalizzato che tenga conto del recall per la classe 1 (churn)
-# Puoi anche usare 'roc_auc' o 'f1' come scoring. 'recall' per la classe 1 è spesso cruciale per il churn.
-scorer = make_scorer(recall_score, pos_label=1)  # Ottimizza per il recall della classe '1' (churn)
+    print(f"Dimensioni delle Feature (X): {X.shape}, Dimensioni del Target (y): {y.shape}")
 
-# Inizializza GridSearchCV
-grid_search = GridSearchCV(estimator=rf,
-                           param_grid=param_grid,
-                           scoring=scorer,  # La metrica su cui ottimizzare
-                           cv=cv,  # Cross-validation strategy
-                           n_jobs=-1,  # Usa tutti i core del processore disponibili
-                           verbose=2,  # Mostra i progressi
-                           refit=True)  # Addestra il modello migliore su tutto il set di training
+    # 6. Suddivisione in Training e Test Set con Stratificazione (80% Training, 20% Test)
+    print("\n[6] Suddivisione in set di training e test con stratificazione (80% Training, 20% Test)...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    print(f"Dimensione del set di training: {X_train.shape[0]} ({X_train.shape[0] / X.shape[0]:.0%})")
+    print(f"Dimensione del set di test: {X_test.shape[0]} ({X_test.shape[0] / X.shape[0]:.0%})")
+    print(f"Distribuzione del target nel training set:\n{y_train.value_counts(normalize=True)}")
+    print(f"Distribuzione del target nel test set:\n{y_test.value_counts(normalize=True)}")
 
-# Esegui la ricerca
-grid_search.fit(X_train, y_train)
+    # 7. Creazione di una Pipeline per Scaling e Addestramento del Modello
+    print("\n[7] Impostazione di una pipeline per StandardScaler e RandomForestClassifier...")
+    pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('classifier', RandomForestClassifier(random_state=42, class_weight='balanced'))
+    ])
 
-print(f"\nBest parameters found: {grid_search.best_params_}")
-print(f"Best cross-validation score (Recall): {grid_search.best_score_:.4f}")
+    # 8. Ottimizzazione degli Iperparametri con GridSearchCV e StratifiedKFold
+    print("\n[8] Esecuzione dell'ottimizzazione degli iperparametri con GridSearchCV e StratifiedKFold...")
+    param_grid = {
+        'classifier__n_estimators': [100, 200],
+        'classifier__max_features': ['sqrt'],
+        'classifier__max_depth': [10, 20, None],
+        'classifier__min_samples_split': [2, 5],
+        'classifier__min_samples_leaf': [1, 2]
+    }
 
-# Il modello migliore è ora disponibile
-model = grid_search.best_estimator_
+    cv_strategy = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    scorer = 'roc_auc'
 
-# 10. Make predictions
-print("\n[10] Making predictions with the optimized model...")
-y_pred = model.predict(X_test)
+    grid_search = GridSearchCV(
+        pipeline, param_grid, cv=cv_strategy, scoring=scorer, n_jobs=-1, verbose=1
+    )
+    grid_search.fit(X_train, y_train)
 
-# 11. Evaluate model performance
-print("\n[11] Evaluating optimized model performance...")
-print("\nClassification Report:\n", classification_report(y_test, y_pred))
-print("\nConfusion Matrix:\n", confusion_matrix(y_test, y_pred))
+    print("\nI migliori parametri trovati da GridSearchCV:")
+    print(grid_search.best_params_)
+    print(f"Miglior punteggio ROC AUC di cross-validation: {grid_search.best_score_:.4f}")
 
-if len(np.unique(y_test)) == 2:
+    model = grid_search.best_estimator_
+    print("\n[9] Modello finale addestrato con i migliori parametri.")
+
+    # 10. Effettuazione delle Previsioni sul Test Set
+    print("\n[10] Effettuazione delle previsioni sul test set...")
+    y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]
-    roc_auc = roc_auc_score(y_test, y_proba)
-    print("\nROC AUC Score:", roc_auc)
 
-    fpr, tpr, _ = roc_curve(y_test, y_proba)
+    # 11. Valutazione delle Performance del Modello
+    print("\n[11] Valutazione delle performance del modello sul test set...")
+    print("\n--- Report di Classificazione ---")
+    print(classification_report(y_test, y_pred))
+
+    print("\n--- Matrice di Confusione ---")
+    cm = confusion_matrix(y_test, y_pred)
+    print(cm)
     plt.figure(figsize=(8, 6))
-    plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.2f}")
-    plt.plot([0, 1], [0, 1], linestyle='--')
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve")
-    plt.legend()
-    plt.grid()
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False,
+                xticklabels=['Previsto No Churn', 'Previsto Churn'],
+                yticklabels=['Reale No Churn', 'Reale Churn'])
+    plt.title('Matrice di Confusione')
+    plt.ylabel('Etichetta Reale')
+    plt.xlabel('Etichetta Prevista')
     plt.show()
-else:
-    print("\n[WARNING] ROC AUC score and curve skipped: only one class present in y_test.")
 
-# 12. Plot top 10 feature importances
-print("\n[12] Plotting top 10 feature importances for the optimized model...")
-importances = model.feature_importances_
-indices = np.argsort(importances)[-10:]
-features = np.array(X.columns)[indices]
+    if len(np.unique(y_test)) == 2:
+        roc_auc = roc_auc_score(y_test, y_proba)
+        print(f"\nROC AUC Score: {roc_auc:.4f}")
 
-plt.figure(figsize=(10, 6))
-plt.title("Top 10 Feature Importances (Optimized Model)")
-plt.barh(features, importances[indices], color='skyblue')
-plt.xlabel("Importance")
-plt.tight_layout()
-plt.grid()
-plt.show()
+        fpr, tpr, _ = roc_curve(y_test, y_proba)
+        plt.figure(figsize=(8, 6))
+        plt.plot(fpr, tpr, label=f"Curva ROC (AUC = {roc_auc:.2f})")
+        plt.plot([0, 1], [0, 1], linestyle='--', color='gray', label='Classificatore Casuale')
+        plt.xlabel("Tasso di Falsi Positivi (1 - Specificità)")
+        plt.ylabel("Tasso di Veri Positivi (Sensibilità)")
+        plt.title("Curva ROC")
+        plt.legend(loc="lower right")
+        plt.grid(True)
+        plt.show()
+    else:
+        print("\n[AVVISO] Punteggio e curva ROC AUC saltati: non entrambe le classi sono presenti in y_test o y_proba.")
 
-print("\n[13] Generating churn probabilities for all customers with optimized model...")
+    # 12. Plot delle Importanze delle Feature Principali
+    print("\n[12] Plot delle 15 importanze delle feature principali...")
+    try:
+        feature_importances = model.named_steps['classifier'].feature_importances_
+        features = X.columns
+        if len(feature_importances) == len(features):
+            importance_df = pd.DataFrame({'feature': features, 'importance': feature_importances})
+            importance_df = importance_df.sort_values(by='importance', ascending=False)
 
-# Generate probabilities for the entire dataset (X_scaled)
-df_results = pd.DataFrame({
-    'customerID': customer_ids_aligned_with_X,
-    'Churn_Probability': model.predict_proba(X_scaled)[:, 1],
-    'Predicted_Churn': model.predict(X_scaled)
-})
+            plt.figure(figsize=(12, 8))
+            sns.barplot(x='importance', y='feature', data=importance_df.head(15), palette='viridis')
+            plt.title("Top 15 Importanze delle Feature (Random Forest)", fontsize=16)
+            plt.xlabel("Importanza", fontsize=12)
+            plt.ylabel("Feature", fontsize=12)
+            plt.tight_layout()
+            plt.show()
+        else:
+            print("[AVVISO] Impossibile plottare le importanze delle feature: disallineamento tra numero di feature e importanze.")
+    except Exception as e:
+        print(f"[ERRORE] durante il plot delle importanze: {e}")
 
-# 15. Top N customers most at risk of churn
-print("\n[15] Identifying top N customers most at risk of churn with optimized model...")
-n_top_customers = 10  # You can change this value
+    # 13. Generazione delle Probabilità di Churn e delle Previsioni per tutti i clienti
+    print("\n[13] Generazione delle probabilità di churn e delle previsioni per tutti i clienti originali...")
 
-# Sort by Churn_Probability in descending order
-top_n_at_risk = df_results.sort_values(by='Churn_Probability', ascending=False).head(n_top_customers)
+    df_for_full_prediction = df_original.copy()
 
-print(f"\nTop {n_top_customers} Customers Most At Risk of Churn:")
-print(top_n_at_risk)
+    # Re-apply the same column dropping for retail services to the full prediction dataframe
+    if existing_columns_to_drop:
+        df_for_full_prediction.drop(columns=existing_columns_to_drop, inplace=True)
 
-print("\n[FINISH] Process completed successfully.")
+    df_for_full_prediction['TotalCharges'] = pd.to_numeric(df_for_full_prediction['TotalCharges'], errors='coerce')
+    df_for_full_prediction.dropna(subset=['TotalCharges'], inplace=True)
+
+    if 'SeniorCitizen' in df_for_full_prediction.columns and df_for_full_prediction['SeniorCitizen'].dtype == 'object':
+        df_for_full_prediction['SeniorCitizen'] = df_for_full_prediction['SeniorCitizen'].map({'No': 0, 'Yes': 1})
+
+    final_customer_ids = df_for_full_prediction['customerID']
+    cols_to_drop_for_full_predict = ['customerID']
+    if 'Churn' in df_for_full_prediction.columns:
+        cols_to_drop_for_full_predict.append('Churn')
+    
+    df_for_full_prediction_features = df_for_full_prediction.drop(columns=cols_to_drop_for_full_predict)
+
+    categorical_cols_full_predict = df_for_full_prediction_features.select_dtypes(include=['object']).columns.tolist()
+    X_full_predict_encoded = pd.get_dummies(df_for_full_prediction_features, columns=categorical_cols_full_predict, drop_first=True)
+
+    missing_cols_in_full = set(X.columns) - set(X_full_predict_encoded.columns)
+    for c in missing_cols_in_full:
+        X_full_predict_encoded[c] = 0
+
+    extra_cols_in_full = set(X_full_predict_encoded.columns) - set(X.columns)
+    X_full_predict_encoded.drop(columns=list(extra_cols_in_full), inplace=True)
+
+    X_full_predict_aligned = X_full_predict_encoded[X.columns]
+
+    churn_probabilities_full = model.predict_proba(X_full_predict_aligned)[:, 1]
+    predicted_churn_full = model.predict(X_full_predict_aligned)
+
+    results_df = pd.DataFrame({
+        'customerID': final_customer_ids.values,
+        'Churn_Probability': churn_probabilities_full,
+        'Predicted_Churn': predicted_churn_full
+    })
+    
+    results_df['Predicted_Churn'] = results_df['Predicted_Churn'].map({0: 'No', 1: 'Yes'})
+
+    # 14. Top 10 clienti più a rischio di Churn
+    print("\n[14] Identificazione dei 10 clienti più a rischio di churn...")
+    top_churn_risk_customers = results_df.sort_values(
+        by='Churn_Probability', ascending=False
+    ).head(10)
+    print("\nTop 10 clienti più a rischio di churn:")
+    print(top_churn_risk_customers)
+
+    print("\n--- Processo completato con successo! ---")
 
 if __name__ == '__main__':
-    print('Hello World')
+    run_random_forest_churn_prediction()
