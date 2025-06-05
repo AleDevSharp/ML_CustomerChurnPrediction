@@ -29,13 +29,13 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-def run_random_forest_churn_prediction(filepath="datasets/Telco-Customer-Churn-two.csv"):
+def run_random_forest_churn_prediction(filepath="datasets/Telco-Customer-Churn.csv"):
     """
     Performs the entire Random Forest classification pipeline for customer churn prediction,
     including data loading, preprocessing, model training, evaluation and visualization.
 
     Args:
-        filepath (str): the file path "Telco-Customer-Churn-two.csv".
+        filepath (str): the file path "Telco-Customer-Churn.csv".
     """
 
     print("\n--- Starting Churn Prediction with Random Forest ---")
