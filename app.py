@@ -40,7 +40,7 @@ def run_random_forest_churn_prediction(filepath="datasets/Telco-Customer-Churn.c
 
     print("\n--- Starting Churn Prediction with Random Forest ---")
 
-    # 1. Dataset Loading
+    # 1. Dataset loading
     print("\n[1] Dataset Load...")
     try:
         df_original = pd.read_csv(filepath)
