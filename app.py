@@ -29,16 +29,17 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-def run_random_forest_churn_prediction(filepath="datasets/Telco-Customer-Churn.csv"):
+def run_random_forest_churn_prediction_adapted(filepath="datasets/Telco_customer_churn.csv"):
     """
     Performs the entire Random Forest classification pipeline for customer churn prediction,
-    including data loading, preprocessing, model training, evaluation and visualization.
+    adapted for the new CSV structure, including data loading, preprocessing,
+    model training, evaluation and visualization.
 
     Args:
-        filepath (str): the file path "Telco-Customer-Churn.csv".
+        filepath (str): The file path to the new customer churn CSV.
     """
 
-    print("\n--- Starting Churn Prediction with Random Forest ---")
+    print("\n--- Starting Churn Prediction ---")
 
     # 1. Dataset loading
     print("\n[1] Dataset Load...")
@@ -52,75 +53,95 @@ def run_random_forest_churn_prediction(filepath="datasets/Telco-Customer-Churn.c
         print(f"An error occurred while loading the dataset: {e}")
         return
 
-    # Create a copy for preprocessing operations
+    # Create a copy for preprocessing operations for training
     df_processed = df_original.copy()
 
-    # Define columns to drop that are not typical for retail activities
-    # These are telco-specific services or contract details.
-    columns_to_drop_retail = [
-        'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity',
-        'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV',
-        'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod'
+    # Columns to remove for features
+    columns_to_remove_from_features = [
+        'Count', 'Churn Label', 'Churn Score', 'CLTV',
+        'Churn Reason', 'Phone Service', 'Multiple Lines', 'Internet Service',
+        'Online Security', 'Online Backup', 'Device Protection', 'Tech Support',
+        'Streaming TV', 'Streaming Movies', 'Contract', 'Paperless Billing', 'Payment Method'
     ]
 
-    # Drop the specified columns if they exist in the DataFrame
-    existing_columns_to_drop = [col for col in columns_to_drop_retail if col in df_processed.columns]
-    if existing_columns_to_drop:
-        df_processed.drop(columns=existing_columns_to_drop, inplace=True)
-        print(f"Columns not relevant to retail removed: {', '.join(existing_columns_to_drop)}.")
+    customer_id_col = 'CustomerID'
+    if customer_id_col in df_processed.columns:
+        if customer_id_col in columns_to_remove_from_features:
+            columns_to_remove_from_features.remove(customer_id_col)
     else:
-        print("No Telco-specific service columns found to remove.")
+        print(f"Warning: '{customer_id_col}' column not found. Results will not be mapped to customer IDs.")
+        customer_id_col = None
 
-    # 2. Initial Data Cleaning and Preparation
-    print("\n[2] Initial Data Cleaning and Preparation...")
-    df_processed['TotalCharges'] = pd.to_numeric(df_processed['TotalCharges'], errors='coerce')
-    df_processed.dropna(inplace=True)
-    print(f"Rows after handling missing values: {df_processed.shape[0]}.")
+    # Drop the specified columns from df_processed (for training)
+    existing_columns_to_drop_for_training = [col for col in columns_to_remove_from_features if
+                                             col in df_processed.columns]
+    if customer_id_col and customer_id_col in df_processed.columns:
+        existing_columns_to_drop_for_training.append(customer_id_col)
 
-    if df_processed['SeniorCitizen'].dtype == 'object':
-        df_processed['SeniorCitizen'] = df_processed['SeniorCitizen'].map({'No': 0, 'Yes': 1})
+    if existing_columns_to_drop_for_training:
+        df_processed.drop(columns=existing_columns_to_drop_for_training, inplace=True)
+        print(f"Columns removed from training data: {', '.join(existing_columns_to_drop_for_training)}.")
+    else:
+        print("No specified columns found to remove from training data.")
 
-    df_processed.drop(columns=['customerID'], inplace=True)
-    print("'customerID' column temporarily removed for training.")
+    # 2. Initial Data Cleaning and Preparation (for df_processed)
+    print("\n[2] Initial Data Cleaning and Preparation (for training data)...")
+    if 'Total Charges' in df_processed.columns:
+        df_processed['Total Charges'] = pd.to_numeric(df_processed['Total Charges'], errors='coerce')
+        df_processed.dropna(subset=['Total Charges'], inplace=True)
+        print(f"Rows after handling missing 'Total Charges' in training data: {df_processed.shape[0]}.")
+    else:
+        print(
+            "Warning: 'Total Charges' column not found in training data. Skipping numeric conversion and NaN handling.")
+
+    if 'Senior Citizen' in df_processed.columns and df_processed['Senior Citizen'].dtype == 'object':
+        df_processed['Senior Citizen'] = df_processed['Senior Citizen'].map({'No': 0, 'Yes': 1})
+        print("'Senior Citizen' column mapped to 0 (No) and 1 (Yes) in training data.")
+    elif 'Senior Citizen' not in df_processed.columns:
+        print("Warning: 'Senior Citizen' column not found in training data.")
 
     # 3. Target Variable Preparation
-    if 'Churn' in df_processed.columns:
-        df_processed['Churn'] = df_processed['Churn'].map({'No': 0, 'Yes': 1})
-        print("Target variable 'Churn' mapped to 0 (No) and 1 (Yes).")
+    target_column = 'Churn Value'
+    if target_column in df_processed.columns:
+        if df_processed[target_column].dtype == 'object':
+            df_processed[target_column] = df_processed[target_column].map({'No': 0, 'Yes': 1})
+            print(f"Target variable '{target_column}' mapped to 0 (No) and 1 (Yes).")
+        else:
+            print(f"Target variable '{target_column}' is already numeric.")
     else:
-        print("Error: 'Churn' column not found. Cannot proceed without a target variable.")
+        print(f"Error: '{target_column}' column not found. Cannot proceed without a target variable.")
         return
 
-    print("\n'Churn' class distribution:")
-    print(df_processed['Churn'].value_counts(normalize=True))
-    if df_processed['Churn'].nunique() < 2:
-        print("[WARNING] Only one class present in the target variable. Cannot train a classifier.")
+    print(f"\n'{target_column}' class distribution:")
+    print(df_processed[target_column].value_counts(normalize=True))
+    if df_processed[target_column].nunique() < 2:
+        print(f"[WARNING] Only one class present in the target variable '{target_column}'. Cannot train a classifier.")
         return
 
-    # 4. Feature Engineering and Encoding
-    print("\n[4] Encoding categorical features with One-Hot Encoding...")
-    categorical_cols = df_processed.select_dtypes(include=['object']).columns.tolist()
+    # 4. Feature Engineering and Encoding (for df_processed)
+    print("\n[4] Encoding categorical features with One-Hot Encoding (for training data)...")
+    categorical_cols_training = df_processed.select_dtypes(include=['object']).columns.tolist()
 
-    if categorical_cols:
-        df_processed = pd.get_dummies(df_processed, columns=categorical_cols, drop_first=True)
-        print(f"Encoded {len(categorical_cols)} categorical features.")
+    if categorical_cols_training:
+        df_processed = pd.get_dummies(df_processed, columns=categorical_cols_training, drop_first=True)
+        print(f"Encoded {len(categorical_cols_training)} categorical features for training.")
     else:
-        print("No categorical features found for encoding.")
+        print("No categorical features found for encoding in training data.")
 
     # 5. Splitting Features and Target
     print("\n[5] Splitting features (X) and target (y)...")
-    X = df_processed.drop('Churn', axis=1)
-    y = df_processed['Churn']
+    x = df_processed.drop(target_column, axis=1)
+    y = df_processed[target_column]
 
-    print(f"Feature (X) dimensions: {X.shape}, Target (y) dimensions: {y.shape}")
+    print(f"Feature (X) dimensions: {x.shape}, Target (y) dimensions: {y.shape}")
 
     # 6. Splitting into Training and Test Sets with Stratification (80% Training, 20% Test)
     print("\n[6] Splitting into training and test sets with stratification (80% Training, 20% Test)...")
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+    x_train, x_test, y_train, y_test = train_test_split(
+        x, y, test_size=0.2, random_state=42, stratify=y
     )
-    print(f"Training set size: {X_train.shape[0]} ({X_train.shape[0] / X.shape[0]:.0%})")
-    print(f"Test set size: {X_test.shape[0]} ({X_test.shape[0] / X.shape[0]:.0%})")
+    print(f"Training set size: {x_train.shape[0]} ({x_train.shape[0] / x.shape[0]:.0%})")
+    print(f"Test set size: {x_test.shape[0]} ({x_test.shape[0] / x.shape[0]:.0%})")
     print(f"Target distribution in training set:\n{y_train.value_counts(normalize=True)}")
     print(f"Target distribution in test set:\n{y_test.value_counts(normalize=True)}")
 
@@ -147,7 +168,7 @@ def run_random_forest_churn_prediction(filepath="datasets/Telco-Customer-Churn.c
     grid_search = GridSearchCV(
         pipeline, param_grid, cv=cv_strategy, scoring=scorer, n_jobs=-1, verbose=1
     )
-    grid_search.fit(X_train, y_train)
+    grid_search.fit(x_train, y_train)
 
     print("\nBest parameters found by GridSearchCV:")
     print(grid_search.best_params_)
@@ -158,8 +179,8 @@ def run_random_forest_churn_prediction(filepath="datasets/Telco-Customer-Churn.c
 
     # 10. Making Predictions on the Test Set
     print("\n[10] Making predictions on the test set...")
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:, 1]
+    y_pred = model.predict(x_test)
+    y_proba = model.predict_proba(x_test)[:, 1]
 
     # 11. Evaluating Model Performance
     print("\n[11] Evaluating model performance on the test set...")
@@ -195,11 +216,11 @@ def run_random_forest_churn_prediction(filepath="datasets/Telco-Customer-Churn.c
     else:
         print("\n[WARNING] ROC AUC score and curve skipped: not both classes are present in y_test or y_proba.")
 
-    # 12. Plotting Top Feature Importances
-    print("\n[12] Plotting top 15 feature ...")
+    # 12. Plotting Top Feature Importance's
+    print("\n[12] Plotting top 15 feature importances...")
     try:
         feature_importances = model.named_steps['classifier'].feature_importances_
-        features = X.columns
+        features = x.columns
         if len(feature_importances) == len(features):
             importance_df = pd.DataFrame({'feature': features, 'importance': feature_importances})
             importance_df = importance_df.sort_values(by='importance', ascending=False)
@@ -220,59 +241,85 @@ def run_random_forest_churn_prediction(filepath="datasets/Telco-Customer-Churn.c
     # 13. Generating Churn Probabilities and Predictions for all Customers
     print("\n[13] Generating churn probabilities and predictions for all original customers...")
 
+    customer_ids_with_index = None
+    if customer_id_col and customer_id_col in df_original.columns:
+        customer_ids_with_index = df_original[[customer_id_col]].copy()
+
     df_for_full_prediction = df_original.copy()
 
-    # Re-apply the same column dropping for retail services to the full prediction dataframe
-    if existing_columns_to_drop:
-        df_for_full_prediction.drop(columns=existing_columns_to_drop, inplace=True)
+    existing_cols_to_drop_for_full_predict = [col for col in columns_to_remove_from_features if
+                                              col in df_for_full_prediction.columns]
+    if customer_id_col and customer_id_col in df_for_full_prediction.columns:
+        existing_cols_to_drop_for_full_predict.append(customer_id_col)
 
-    df_for_full_prediction['TotalCharges'] = pd.to_numeric(df_for_full_prediction['TotalCharges'], errors='coerce')
-    df_for_full_prediction.dropna(subset=['TotalCharges'], inplace=True)
+    if existing_cols_to_drop_for_full_predict:
+        df_for_full_prediction_features_only = df_for_full_prediction.drop(
+            columns=existing_cols_to_drop_for_full_predict, errors='ignore'
+        )
+    else:
+        df_for_full_prediction_features_only = df_for_full_prediction.copy()
 
-    if 'SeniorCitizen' in df_for_full_prediction.columns and df_for_full_prediction['SeniorCitizen'].dtype == 'object':
-        df_for_full_prediction['SeniorCitizen'] = df_for_full_prediction['SeniorCitizen'].map({'No': 0, 'Yes': 1})
+    # Clean 'Total Charges' from dataframe
+    if 'Total Charges' in df_for_full_prediction_features_only.columns:
+        df_for_full_prediction_features_only['Total Charges'] = pd.to_numeric(
+            df_for_full_prediction_features_only['Total Charges'], errors='coerce')
 
-    final_customer_ids = df_for_full_prediction['customerID']
-    cols_to_drop_for_full_predict = ['customerID']
-    if 'Churn' in df_for_full_prediction.columns:
-        cols_to_drop_for_full_predict.append('Churn')
+        df_for_full_prediction_features_only.dropna(
+            subset=['Total Charges'], inplace=True)
 
-    df_for_full_prediction_features = df_for_full_prediction.drop(columns=cols_to_drop_for_full_predict)
+    # Map senior citizen
+    if 'Senior Citizen' in df_for_full_prediction_features_only.columns and \
+            df_for_full_prediction_features_only['Senior Citizen'].dtype == 'object':
+        df_for_full_prediction_features_only['Senior Citizen'] = df_for_full_prediction_features_only[
+            'Senior Citizen'].map({'No': 0, 'Yes': 1})
 
-    categorical_cols_full_predict = df_for_full_prediction_features.select_dtypes(include=['object']).columns.tolist()
-    X_full_predict_encoded = pd.get_dummies(df_for_full_prediction_features, columns=categorical_cols_full_predict,
-                                            drop_first=True)
+    categorical_cols_full_predict = df_for_full_prediction_features_only.select_dtypes(
+        include=['object']).columns.tolist()
+    x_full_predict_encoded = pd.get_dummies(
+        df_for_full_prediction_features_only, columns=categorical_cols_full_predict, drop_first=True
+    )
 
-    missing_cols_in_full = set(X.columns) - set(X_full_predict_encoded.columns)
-    for c in missing_cols_in_full:
-        X_full_predict_encoded[c] = 0
+    missing_cols = set(x.columns) - set(x_full_predict_encoded.columns)
+    for col in missing_cols:
+        x_full_predict_encoded[col] = 0
 
-    extra_cols_in_full = set(X_full_predict_encoded.columns) - set(X.columns)
-    X_full_predict_encoded.drop(columns=list(extra_cols_in_full), inplace=True)
+    extra_cols = set(x_full_predict_encoded.columns) - set(x.columns)
+    x_full_predict_encoded.drop(columns=list(extra_cols), inplace=True)
 
-    X_full_predict_aligned = X_full_predict_encoded[X.columns]
+    x_full_predict_aligned = x_full_predict_encoded[x.columns]
 
-    churn_probabilities_full = model.predict_proba(X_full_predict_aligned)[:, 1]
-    predicted_churn_full = model.predict(X_full_predict_aligned)
+    # Prevision
+    churn_probabilities_full = model.predict_proba(x_full_predict_aligned)[:, 1]
+    predicted_churn_full = model.predict(x_full_predict_aligned)
 
-    results_df = pd.DataFrame({
-        'customerID': final_customer_ids.values,
+    # Create DataFrame
+    results_prediction_data = pd.DataFrame({
         'Churn_Probability': churn_probabilities_full,
         'Predicted_Churn': predicted_churn_full
-    })
+    }, index=x_full_predict_aligned.index)
+
+    # Original Customer id
+    if customer_ids_with_index is not None:
+        results_df = customer_ids_with_index.merge(results_prediction_data, left_index=True, right_index=True,
+                                                   how='inner')
+    else:
+        results_df = results_prediction_data
 
     results_df['Predicted_Churn'] = results_df['Predicted_Churn'].map({0: 'No', 1: 'Yes'})
 
     # 14. Top 10 Customers Most At Risk of Churn
     print("\n[14] Identifying top 10 customers most at risk of churn...")
-    top_churn_risk_customers = results_df.sort_values(
-        by='Churn_Probability', ascending=False
-    ).head(10)
-    print("\nTop 10 customers most at risk of churn:")
-    print(top_churn_risk_customers)
+    if customer_id_col and customer_id_col in results_df.columns:
+        top_churn_risk_customers = results_df.sort_values(
+            by='Churn_Probability', ascending=False
+        ).head(10)
+        print("\nTop 10 customers most at risk of churn:")
+        print(top_churn_risk_customers)
+    else:
+        print("Skipping top 10 customers report as 'CustomerID' is not available in results_df.")
 
-    print("\n--- Process completed successfully! ---")
+    print("\n--- Finish Churn Prediction ---")
 
 
 if __name__ == '__main__':
-    run_random_forest_churn_prediction()
+    run_random_forest_churn_prediction_adapted()
